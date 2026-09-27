@@ -1,0 +1,71 @@
+{
+  "name": "mindshaft-llm",
+  "version": "1.0.0",
+  "description": "An LLM agent that plays Minecraft through symbolic world observation and a validated tool surface \u2014 or hand the folder to a coding agent and let it play.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "main": "dist/index.js",
+  "bin": {
+    "mindshaft": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "start": "node --enable-source-maps dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist",
+    "test:coverage": "vitest run --coverage",
+    "play": "node --enable-source-maps dist/index.js --control",
+    "act": "node --enable-source-maps dist/act.js",
+    "server": "./server/start.sh"
+  },
+  "keywords": [
+    "minecraft",
+    "mineflayer",
+    "llm",
+    "ai-agent",
+    "autonomous-agent",
+    "agentic",
+    "openrouter",
+    "tool-use",
+    "game-ai",
+    "typescript"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.0.0",
+    "minecraft-data": "^3.117.0",
+    "mineflayer": "^4.39.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "prismarine-item": "^1.18.0",
+    "vec3": "^0.1.8",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^3.2.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+  "optionalDependencies": {
+    "prismarine-viewer": "^1.33.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BugraAkdemir/mindshaft-llm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BugraAkdemir/mindshaft-llm/issues"
+  },
+  "homepage": "https://github.com/BugraAkdemir/mindshaft-llm#readme"
+}

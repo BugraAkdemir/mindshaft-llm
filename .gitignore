@@ -1,0 +1,29 @@
+node_modules/
+dist/
+.env
+*.log
+coverage/
+.DS_Store
+
+# Bundled test server. `server/setup.sh` fetches the binaries; everything below
+# is either a large download, generated world state, or personal to one machine.
+server/server.jar
+server/jre21/
+server/jre21.tar.gz
+server/world/
+server/world_nether/
+server/world_the_end/
+server/libraries/
+server/versions/
+server/logs/
+server/console.in
+server/*.log
+server/eula.txt
+server/ops.json
+server/banned-ips.json
+server/banned-players.json
+server/whitelist.json
+server/usercache.json
+
+# External-control exchange files (regenerated each run)
+control/
