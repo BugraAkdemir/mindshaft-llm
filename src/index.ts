@@ -9,8 +9,10 @@ import {
   type Config,
 } from './config/config.js';
 import { ExternalControlProvider } from './llm/external.js';
+import { JevProvider } from './llm/jev.js';
 import { OpenRouterProvider } from './llm/openrouter.js';
 import type { LLMProvider } from './llm/provider.js';
+import { startPanelBridge } from './panel/bridge.js';
 import { resolve } from 'node:path';
 import { createLogger, tagged, type Logger } from './utils/logger.js';
 
@@ -56,7 +58,11 @@ async function main(): Promise<number> {
       )
     : null;
 
-  const provider: LLMProvider = control ?? new OpenRouterProvider(cfg.llm, logger);
+  const provider: LLMProvider =
+    control ??
+    (cfg.llm.provider === 'jev'
+      ? new JevProvider(cfg.jev, logger)
+      : new OpenRouterProvider(cfg.llm, logger));
   const agent = new Agent(cfg, provider, logger);
   const loop = new ActionLoop(agent, cfg, logger);
 
@@ -65,6 +71,10 @@ async function main(): Promise<number> {
   }
 
   installShutdownHandlers(loop, agent, logger);
+
+  // The panel owns this process, so stdout is reserved for its event stream.
+  // `--panel` already routed the logs to stderr in `loadConfig`.
+  if (cfg.log.stderr) startPanelBridge(agent, loop);
 
   try {
     const bot = await agent.start();
@@ -134,7 +144,9 @@ function printBanner(cfg: Config): void {
       'Mindshaft',
       DIVIDER,
       '',
-      cfg.control.enabled ? 'Driver: external control (no LLM)' : `Model: ${cfg.llm.model}`,
+      cfg.control.enabled
+        ? 'Driver: external control (no LLM)'
+        : `Model: ${cfg.llm.provider === 'jev' ? cfg.jev.model : cfg.llm.model} via ${cfg.llm.provider}`,
       `Server: ${cfg.minecraft.host}:${cfg.minecraft.port}`,
       `Username: ${cfg.minecraft.username}`,
       ...(cfg.control.enabled ? [] : [`Mode: ${cfg.llm.mode}`]),
