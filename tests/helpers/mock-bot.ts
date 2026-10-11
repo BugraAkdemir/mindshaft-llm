@@ -78,6 +78,9 @@ export interface MockBot extends EventEmitter {
   heldItem: MockItem | null;
   inventory: {
     slots: Array<MockItem | null>;
+    /** First and last slot of the player's own inventory, as the real window reports. */
+    inventoryStart: number;
+    inventoryEnd: number;
     items: () => MockItem[];
     emptySlotCount: () => number;
     count: (type: number, metadata: number | null) => number;
@@ -146,6 +149,8 @@ export function createMockBot(options: MockBotOptions = {}): MockBot {
   const position = options.position ?? new Vec3(0.5, 64, 0.5);
   const blocks = options.blocks ?? new Map<string, string>();
   const inventory = [...(options.inventory ?? [])];
+  const inventorySlots: Array<MockItem | null> = new Array<MockItem | null>(46).fill(null);
+  for (const item of inventory) inventorySlots[item.slot] = item;
   const controls: Record<string, boolean> = {};
   const calls: string[] = [];
 
@@ -203,11 +208,18 @@ export function createMockBot(options: MockBotOptions = {}): MockBot {
     heldItem: options.heldItem ?? null,
 
     inventory: {
-      slots: new Array<MockItem | null>(46).fill(null),
-      items: () => inventory,
-      emptySlotCount: () => Math.max(0, 36 - inventory.length),
+      // `slots` is the single source of truth, mirroring the real window: slot
+      // 0 is the crafting result, 1-4 the 2x2 grid, 5-8 armour, 9-45 the
+      // player's inventory. `items()` is derived from it.
+      slots: inventorySlots,
+      inventoryStart: 9,
+      inventoryEnd: 45,
+      items: () => inventorySlots.filter((item): item is MockItem => item !== null),
+      emptySlotCount: () => inventorySlots.filter((item) => item === null).length,
       count: (type: number) =>
-        inventory.filter((item) => item.type === type).reduce((total, item) => total + item.count, 0),
+        inventorySlots
+          .filter((item): item is MockItem => item !== null && item.type === type)
+          .reduce((total, item) => total + item.count, 0),
     },
 
     pathfinder: {

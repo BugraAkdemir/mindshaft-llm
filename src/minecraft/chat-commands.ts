@@ -1,6 +1,12 @@
 import type { Bot } from 'mineflayer';
 import { tagged, type Logger } from '../utils/logger.js';
 
+/** Words that open the message channel instead of naming a command. */
+const MESSAGE_COMMANDS = new Set(['msg', 'say', 'tell', 'ask', 'chat']);
+
+/** Every word the command switch understands, used to route whispers. */
+const KNOWN_COMMANDS = new Set(['goal', 'status', 'stop', 'pause', 'resume', 'help']);
+
 export interface ChatCommandConfig {
   enabled: boolean;
   /** Usernames permitted to issue commands. Empty means nobody. */
@@ -15,6 +21,12 @@ export interface ChatCommandHandlers {
   stop: (reason: string) => void;
   pause: () => void;
   resume: () => void;
+  /**
+   * Something the operator said that is not a command: a question, a hint, a
+   * correction. It reaches the agent as context for the next decision, and the
+   * agent answers with the `say` tool — it does not replace the goal.
+   */
+  message: (from: string, text: string, via: 'chat' | 'whisper') => void;
 }
 
 /**
@@ -32,6 +44,12 @@ export interface ChatCommandHandlers {
  * Note on the `/` prefix: a vanilla server swallows `/anything` as a command and
  * the bot never sees it, so public commands use a plain prefix (`!goal ...`).
  * Whispers (`/msg <bot> goal ...`) do reach the bot and are also accepted.
+ *
+ * Alongside the closed command set there is a **message channel**: `!msg <text>`
+ * in public chat, or simply whispering anything that is not a command. A goal is
+ * a standing objective and retasking the agent to ask it a question throws that
+ * objective away, so questions and asides travel separately and the agent
+ * answers them with the `say` tool while its goal stays put.
  */
 export class ChatCommandListener {
   private readonly bot: Bot;
@@ -63,6 +81,16 @@ export class ChatCommandListener {
     this.log.info(
       `chat commands enabled for: ${[...this.allowed].join(', ')} (public prefix "${this.cfg.prefix}", or whisper the bot)`,
     );
+  }
+
+  /**
+   * Whether a line of public chat belongs to this channel, so the event stream
+   * can leave it alone instead of also reporting it as untrusted chatter.
+   */
+  public claims(username: string, message: string): boolean {
+    if (!this.attached) return false;
+    if (!message.startsWith(this.cfg.prefix)) return false;
+    return this.allowed.has(username.toLowerCase());
   }
 
   public detach(): void {
@@ -97,6 +125,23 @@ export class ChatCommandListener {
     const parsed = parseCommand(body);
     if (!parsed) return;
 
+    if (MESSAGE_COMMANDS.has(parsed.command)) {
+      if (parsed.argument === '') {
+        this.reply(username, via, `Usage: ${this.cfg.prefix}msg <what you want to say or ask>`);
+        return;
+      }
+      this.deliver(username, parsed.argument, via);
+      return;
+    }
+
+    // A whisper is already addressed to the bot, so an unrecognised first word
+    // is far more likely to be plain speech than a mistyped command. Treating
+    // it as a message is what makes `/msg <bot> where are you?` work.
+    if (via === 'whisper' && !KNOWN_COMMANDS.has(parsed.command)) {
+      this.deliver(username, body.trim().slice(0, 300), via);
+      return;
+    }
+
     this.log.info(`command from ${username} via ${via}: ${parsed.command}`);
 
     switch (parsed.command) {
@@ -128,12 +173,29 @@ export class ChatCommandListener {
         this.reply(
           username,
           via,
-          `Commands: ${this.cfg.prefix}goal <text>, ${this.cfg.prefix}status, ${this.cfg.prefix}pause, ${this.cfg.prefix}resume, ${this.cfg.prefix}stop`,
+          `Commands: ${this.cfg.prefix}goal <text>, ${this.cfg.prefix}msg <text>, ${this.cfg.prefix}status, ` +
+            `${this.cfg.prefix}pause, ${this.cfg.prefix}resume, ${this.cfg.prefix}stop. Whisper me and I just listen.`,
         );
         return;
       default:
-        this.reply(username, via, `Unknown command "${parsed.command}". Try ${this.cfg.prefix}help`);
+        this.reply(
+          username,
+          via,
+          `Unknown command "${parsed.command}". Try ${this.cfg.prefix}help, or ${this.cfg.prefix}msg to just talk to me.`,
+        );
     }
+  }
+
+  /**
+   * Hands a message to the agent. No acknowledgement is sent: the agent's own
+   * reply is the acknowledgement, and a "got it" from here would only make the
+   * real answer look like a duplicate.
+   */
+  private deliver(username: string, text: string, via: 'chat' | 'whisper'): void {
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, 300);
+    if (clean === '') return;
+    this.log.info(`message from ${username} via ${via}: ${clean}`);
+    this.handlers.message(username, clean, via);
   }
 
   private reply(username: string, via: 'chat' | 'whisper', text: string): void {

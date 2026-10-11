@@ -126,6 +126,7 @@ describe('registered tool set', () => {
         'observe',
         'pillar_up',
         'place_block',
+        'say',
         'smelt',
         'sneak',
         'sprint',

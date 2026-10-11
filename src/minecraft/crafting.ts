@@ -11,6 +11,14 @@ import type { GameRegistry } from './registry.js';
 const FURNACE_BLOCKS = ['furnace', 'blast_furnace', 'smoker'] as const;
 const INTERACT_REACH = 4.0;
 
+/** How often to re-read the inventory while waiting for a craft to be credited. */
+const CRAFT_SETTLE_POLL_MS = 25;
+
+/** Upper bound on that wait — long enough for a slow server, short enough to fail fast. */
+const CRAFT_SETTLE_MAX_MS = 2_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Items smelted per unit of fuel. Fuel burn times are not part of
  * minecraft-data, so the common fuels are tabulated here; anything not listed
@@ -225,7 +233,14 @@ export class CraftingManager {
     const before = this.snapshot();
 
     try {
-      await this.bot.craft(recipe, crafts, table ?? undefined);
+      // One craft per call, with a beat between them. Handing Mineflayer the
+      // whole batch at once desyncs the 2x2 inventory grid: the ingredient
+      // stack ends up stranded on the cursor instead of being consumed, so
+      // every log that was meant to become planks silently disappears.
+      for (let i = 0; i < crafts; i += 1) {
+        await this.bot.craft(recipe, 1, table ?? undefined);
+        if (i < crafts - 1) await this.bot.waitForTicks(2);
+      }
     } catch (err) {
       return fail(
         'MINEFLAYER_ERROR',
@@ -234,11 +249,22 @@ export class CraftingManager {
       );
     }
 
-    // The window closes asynchronously; give the inventory a tick to settle.
-    await this.bot.waitForTicks(4);
-
-    const after = this.snapshot();
-    const produced = (after.get(resolved.name) ?? 0) - (before.get(resolved.name) ?? 0);
+    // The server credits the result asynchronously, and `craft()` resolves
+    // before that confirmation lands. A fixed settle races it: the snapshot
+    // then shows no change, the craft is reported as a failure, and the
+    // agent's retry spends a second set of ingredients on a craft that
+    // already happened. Poll for the real inventory change instead, but cap
+    // the wait well short of the action budget so a craft that genuinely
+    // produced nothing still fails fast with a readable message.
+    const settleDeadline = Math.min(startedAt + options.timeoutMs, Date.now() + CRAFT_SETTLE_MAX_MS);
+    let after = this.snapshot();
+    let produced = (after.get(resolved.name) ?? 0) - (before.get(resolved.name) ?? 0);
+    while (produced <= 0 && Date.now() < settleDeadline) {
+      await this.bot.waitForTicks(2);
+      await sleep(CRAFT_SETTLE_POLL_MS);
+      after = this.snapshot();
+      produced = (after.get(resolved.name) ?? 0) - (before.get(resolved.name) ?? 0);
+    }
     const consumed: Array<{ item: string; count: number }> = [];
     for (const [name, quantity] of before) {
       const lost = quantity - (after.get(name) ?? 0);
@@ -575,9 +601,26 @@ export class CraftingManager {
     return fail(move.error, `Could not reach the ${block.name}: ${move.details}`);
   }
 
+  /**
+   * Counts what the player is actually carrying.
+   *
+   * Deliberately skips the window's result slot and crafting grid: Mineflayer
+   * writes the not-yet-confirmed output there locally, so counting those slots
+   * reports a craft that the server never delivered — and the agent's next
+   * move spends a second set of ingredients on it.
+   */
   private snapshot(): Map<string, number> {
     const counts = new Map<string, number>();
-    for (const item of this.bot.inventory.items()) {
+    const window = this.bot.inventory as unknown as {
+      slots: Array<{ name: string; count: number } | null>;
+      inventoryStart?: number;
+      inventoryEnd?: number;
+    };
+    const start = window.inventoryStart ?? 0;
+    const end = window.inventoryEnd ?? window.slots.length;
+    for (let slot = start; slot < end; slot += 1) {
+      const item = window.slots[slot];
+      if (!item) continue;
       counts.set(item.name, (counts.get(item.name) ?? 0) + item.count);
     }
     return counts;

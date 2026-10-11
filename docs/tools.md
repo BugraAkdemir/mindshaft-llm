@@ -1,6 +1,6 @@
 # Tool reference
 
-The model cannot execute code. It can only choose one of these 17 tools, and every argument is
+The model cannot execute code. It can only choose one of these 18 tools, and every argument is
 validated against a Zod schema before anything touches Mineflayer.
 
 | Tool          | Arguments                                        | Does |
@@ -22,6 +22,7 @@ validated against a Zod schema before anything touches Mineflayer.
 | `sneak`       | `enabled`                                        | Toggle sneaking. |
 | `sprint`      | `enabled`                                        | Toggle sprinting. |
 | `wait`        | `seconds`, `reason?`                             | Do nothing for a while. |
+| `say`         | `message`, `to?`                                 | Speak in public chat, or whisper one player. |
 
 Every tool returns a structured result. Failures carry a machine-readable code and a detail
 string written for the model to act on:

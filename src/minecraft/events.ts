@@ -47,6 +47,7 @@ export class EventAggregator {
   private readonly registry: GameRegistry;
   private readonly sink: EventSink;
   private readonly log: Logger;
+  private readonly claimedByCommandChannel: (username: string, message: string) => boolean;
 
   private lastEmitted = new Map<string, number>();
   private lastHealth: number;
@@ -56,11 +57,24 @@ export class EventAggregator {
   /** Whether the bot has spawned at least once (to label respawns correctly). */
   private hasSpawned = false;
 
-  public constructor(bot: Bot, registry: GameRegistry, sink: EventSink, logger?: Logger) {
+  /**
+   * `claimedByCommandChannel` marks public chat that the command listener has
+   * already taken. Without it an operator's `!msg` arrives twice — once as a
+   * trusted message to answer and once as untrusted chat to distrust, which is
+   * a contradiction to hand a model in the same prompt.
+   */
+  public constructor(
+    bot: Bot,
+    registry: GameRegistry,
+    sink: EventSink,
+    logger?: Logger,
+    claimedByCommandChannel?: (username: string, message: string) => boolean,
+  ) {
     this.bot = bot;
     this.registry = registry;
     this.sink = sink;
     this.log = tagged('EVENT', logger);
+    this.claimedByCommandChannel = claimedByCommandChannel ?? (() => false);
     this.lastHealth = bot.health ?? 20;
     this.lastFood = bot.food ?? 20;
   }
@@ -213,6 +227,7 @@ export class EventAggregator {
    */
   private onChat = (username: string, message: string): void => {
     if (username === this.bot.username) return;
+    if (this.claimedByCommandChannel(username, message)) return;
     const safe = message.replace(/\s+/g, ' ').slice(0, 160);
     this.emit(
       'chat',

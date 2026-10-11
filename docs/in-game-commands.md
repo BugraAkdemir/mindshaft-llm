@@ -4,11 +4,39 @@ A trusted player can retask the agent from Minecraft chat:
 
 ```text
 !goal find iron and craft an iron pickaxe
+!msg how much wood do you have?
 !status
 !pause
 !resume
 !stop
 ```
+
+## Talking to it, as opposed to ordering it
+
+`!goal` replaces what the agent is working on. Asking it a question should not do
+that, so questions and asides go through a separate channel:
+
+```text
+!msg kac tane odunun var?
+```
+
+```text
+/msg opencode kac tane odunun var?
+```
+
+A whisper needs no prefix at all — anything you whisper that is not one of the
+commands above is treated as speech. `!say`, `!tell` and `!ask` are accepted as
+synonyms of `!msg`.
+
+The message arrives at the top of the agent's next turn, under **Important**,
+labelled as coming from a trusted operator — and explicitly *not* as a goal
+change. The agent answers with its `say` tool, which speaks in public chat or
+whispers back when given a name. An unanswered message stays in front of the
+agent for the next few turns rather than scrolling away, and is retired the
+moment the agent actually speaks.
+
+The agent can also start a conversation: `say` is an ordinary tool, so it will
+use it to report what it is doing or to ask you for something.
 
 Set who is allowed in `.env` — this list is the entire security boundary:
 

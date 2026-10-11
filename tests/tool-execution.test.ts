@@ -480,3 +480,78 @@ describe('combat tool', () => {
     });
   });
 });
+
+describe('say tool', () => {
+  /** The mock bot has no chat senders; record what would have gone out. */
+  function talker() {
+    const h = harness();
+    const said: string[] = [];
+    const whispered: Array<{ to: string; text: string }> = [];
+    (h.bot as unknown as { chat: (text: string) => void }).chat = (text) => said.push(text);
+    (h.bot as unknown as { whisper: (to: string, text: string) => void }).whisper = (to, text) =>
+      whispered.push({ to, text });
+    return { ...h, said, whispered };
+  }
+
+  it('speaks in public chat', async () => {
+    const { run, said } = talker();
+    const result = await run('say', { message: 'heading to the mine' });
+
+    expect(result).toMatchObject({ success: true });
+    expect(said).toEqual(['heading to the mine']);
+    if (!result.success) return;
+    expect((result.data as Record<string, unknown>)['channel']).toBe('public');
+  });
+
+  it('whispers when given a recipient', async () => {
+    const { run, whispered, said } = talker();
+    const result = await run('say', { message: 'at 164,82,-31', to: 'bugraa' });
+
+    expect(result).toMatchObject({ success: true });
+    expect(whispered).toEqual([{ to: 'bugraa', text: 'at 164,82,-31' }]);
+    expect(said).toEqual([]);
+  });
+
+  it('refuses a message that would run as a server command', async () => {
+    const { run, said } = talker();
+    expect(await run('say', { message: '/kill @e' })).toMatchObject({
+      success: false,
+      error: 'INVALID_ARGUMENTS',
+    });
+    expect(said).toEqual([]);
+  });
+
+  it('collapses newlines so one message cannot become two chat lines', async () => {
+    const { run, said } = talker();
+    await run('say', { message: 'first line\nsecond line' });
+    expect(said).toEqual(['first line second line']);
+  });
+
+  it('rejects an empty message and an over-long one', async () => {
+    const { run } = talker();
+    expect(await run('say', { message: '   ' })).toMatchObject({ success: false });
+    expect(await run('say', { message: 'x'.repeat(400) })).toMatchObject({
+      success: false,
+      error: 'INVALID_ARGUMENTS',
+    });
+  });
+
+  it('rejects a recipient that is not a valid username', async () => {
+    const { run } = talker();
+    expect(await run('say', { message: 'hi', to: 'not a name' })).toMatchObject({
+      success: false,
+      error: 'INVALID_ARGUMENTS',
+    });
+  });
+
+  it('reports a failing chat sender instead of throwing', async () => {
+    const { run, bot } = talker();
+    (bot as unknown as { chat: () => void }).chat = () => {
+      throw new Error('chat is disabled');
+    };
+    expect(await run('say', { message: 'hello' })).toMatchObject({
+      success: false,
+      error: 'MINEFLAYER_ERROR',
+    });
+  });
+});

@@ -238,6 +238,31 @@ export const WaitArgs = z
   })
   .describe('Do nothing for a while — waiting out rain, letting a furnace finish, or letting mobs wander off.');
 
+export const SayArgs = z
+  .object({
+    message: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      // A leading `/` would make the server run this as a command rather than
+      // say it, and the command prefix would make the bot issue orders to
+      // itself. Both are rejected here rather than sanitised, so the refusal is
+      // visible instead of silently changing what was said.
+      .refine((text) => !text.startsWith('/'), 'cannot start with "/" — that would be a server command, not speech')
+      .describe('What to say. One short line; Minecraft drops overly long chat messages.'),
+    to: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_]{1,16}$/, 'must be a Minecraft username')
+      .optional()
+      .describe('Username to whisper privately. Omit to speak in public chat.'),
+  })
+  .describe(
+    'Speak in game. Use it to answer a player who asked you something, to report what you are doing, ' +
+      'or to ask for help. Talking is not progress on its own — say one thing and get back to the goal.',
+  );
+
 /* ────────────────────────── JSON Schema emission ──────────────────────── */
 
 /**

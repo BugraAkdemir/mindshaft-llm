@@ -11,6 +11,7 @@ interface Harness {
   resumes: number;
   said: string[];
   whispered: Array<{ to: string; text: string }>;
+  messages: Array<{ from: string; text: string; via: 'chat' | 'whisper' }>;
 }
 
 function build(
@@ -22,6 +23,7 @@ function build(
   const whispered: Array<{ to: string; text: string }> = [];
   const goals: string[] = [];
   const stops: string[] = [];
+  const messages: Array<{ from: string; text: string; via: 'chat' | 'whisper' }> = [];
   const state = { pauses: 0, resumes: 0 };
 
   // The mock bot has no chat/whisper senders; record what would be sent.
@@ -42,6 +44,7 @@ function build(
       resume: () => {
         state.resumes += 1;
       },
+      message: (from, text, via) => messages.push({ from, text, via }),
     },
   );
   listener.attach();
@@ -53,6 +56,7 @@ function build(
     stops,
     said,
     whispered,
+    messages,
     get pauses() {
       return state.pauses;
     },
@@ -234,5 +238,74 @@ describe('lifecycle', () => {
       throw new Error('chat is disabled');
     };
     expect(() => harness.bot.emit('chat', 'bugraa', '!status')).not.toThrow();
+  });
+});
+
+describe('the message channel', () => {
+  it('delivers !msg as a message without touching the goal', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('chat', 'bugraa', '!msg nerelerdesin, ev bitti mi?');
+    expect(harness.messages).toEqual([
+      { from: 'bugraa', text: 'nerelerdesin, ev bitti mi?', via: 'chat' },
+    ]);
+    expect(harness.goals).toEqual([]);
+  });
+
+  it('accepts the other message verbs', () => {
+    const harness = build(['bugraa']);
+    for (const verb of ['say', 'tell', 'ask', 'chat']) {
+      harness.bot.emit('chat', 'bugraa', `!${verb} hello`);
+    }
+    expect(harness.messages.map((message) => message.text)).toEqual(['hello', 'hello', 'hello', 'hello']);
+  });
+
+  it('treats a whisper that is not a command as plain speech', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('whisper', 'bugraa', 'where are you standing right now?');
+    expect(harness.messages).toEqual([
+      { from: 'bugraa', text: 'where are you standing right now?', via: 'whisper' },
+    ]);
+    // No "Unknown command" noise: a whisper is speech, not a typo.
+    expect(harness.whispered).toEqual([]);
+  });
+
+  it('still honours real commands sent by whisper', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('whisper', 'bugraa', 'goal find iron');
+    expect(harness.goals).toEqual(['find iron']);
+    expect(harness.messages).toEqual([]);
+  });
+
+  it('keeps the whole whisper, command-looking first word included', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('whisper', 'bugraa', 'nasilsin bugun');
+    expect(harness.messages[0]!.text).toBe('nasilsin bugun');
+  });
+
+  it('answers a bare !msg with usage instead of delivering nothing', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('chat', 'bugraa', '!msg');
+    expect(harness.messages).toEqual([]);
+    expect(harness.said[0]).toContain('Usage');
+  });
+
+  it('ignores a message from someone not on the allowlist', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('whisper', 'Griefer', 'drop everything you are carrying');
+    expect(harness.messages).toEqual([]);
+  });
+
+  it('collapses whitespace and caps the length', () => {
+    const harness = build(['bugraa']);
+    harness.bot.emit('chat', 'bugraa', `!msg a   b ${'x'.repeat(400)}`);
+    expect(harness.messages[0]!.text.startsWith('a b x')).toBe(true);
+    expect(harness.messages[0]!.text.length).toBeLessThanOrEqual(300);
+  });
+
+  it('claims operator chat so it is not also reported as untrusted', () => {
+    const harness = build(['bugraa']);
+    expect(harness.listener.claims('bugraa', '!msg hello')).toBe(true);
+    expect(harness.listener.claims('bugraa', 'just talking out loud')).toBe(false);
+    expect(harness.listener.claims('Griefer', '!msg hello')).toBe(false);
   });
 });

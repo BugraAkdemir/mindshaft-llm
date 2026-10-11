@@ -489,7 +489,7 @@ describe('collecting drops', () => {
     const originalGoto = bot.pathfinder.goto;
     bot.pathfinder.goto = async (goal) => {
       await originalGoto(goal);
-      bot.inventory.items().push({ name: 'oak_log', type: 17, count: 2, slot: 9 });
+      bot.inventory.slots[9] = { name: 'oak_log', type: 17, count: 2, slot: 9 };
     };
 
     const result = await inventory.collect({ radius: 12, maxItems: 3, timeoutMs: 8_000 });
@@ -775,8 +775,8 @@ describe('crafting', () => {
     bot.recipesFor = () => [{ requiresTable: false, result: { count: 4 }, delta: [] }];
     bot.craft = async () => {
       bot.__calls.push('craft');
-      bot.inventory.items()[0]!.count = 2;
-      bot.inventory.items().push({ name: 'stick', type: 879, count: 4, slot: 10 });
+      bot.inventory.slots[9]!.count = 2;
+      bot.inventory.slots[10] = { name: 'stick', type: 879, count: 4, slot: 10 };
     };
 
     const result = await crafting.craft('stick', 4, { searchRadius: 12, timeoutMs: 8_000 });
@@ -796,6 +796,82 @@ describe('crafting', () => {
     };
 
     const result = await crafting.craft('stick', 1, { searchRadius: 12, timeoutMs: 8_000 });
+    expect(result).toMatchObject({ success: false, error: 'MINEFLAYER_ERROR' });
+  });
+
+  it('waits for a slow server to credit the result instead of calling it a failure', async () => {
+    const { bot, crafting } = build({ inventory: [{ name: 'oak_planks', type: 43, count: 4, slot: 9 }] });
+    bot.recipesFor = () => [{ requiresTable: false, result: { count: 4 }, delta: [] }];
+    // The server needs ten ticks to send the crafted stack; `craft()` itself
+    // resolves immediately. A fixed four-tick settle reads that as "nothing
+    // happened" and the retry burns another two planks.
+    let ticks = 0;
+    bot.waitForTicks = async (n: number) => {
+      ticks += n;
+      if (ticks >= 10) {
+        bot.inventory.slots[9]!.count = 2;
+        bot.inventory.slots[10] = { name: 'stick', type: 879, count: 4, slot: 10 };
+      }
+    };
+    bot.craft = async () => {
+      bot.__calls.push('craft');
+    };
+
+    const result = await crafting.craft('stick', 4, { searchRadius: 12, timeoutMs: 8_000 });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.produced).toBe(4);
+    expect(result.data.consumed).toEqual([{ item: 'oak_planks', count: 2 }]);
+  });
+
+  it('crafts one recipe at a time so a batch cannot strand the ingredients', async () => {
+    const { bot, crafting } = build({ inventory: [{ name: 'oak_log', type: 20, count: 8, slot: 9 }] });
+    bot.recipesFor = () => [{ requiresTable: false, result: { count: 4 }, delta: [] }];
+    const batches: number[] = [];
+    bot.craft = async (_recipe: unknown, count?: number) => {
+      batches.push(count ?? 1);
+      bot.inventory.slots[9]!.count -= 1;
+      bot.inventory.slots[10] = { name: 'oak_planks', type: 43, count: 4 * batches.length, slot: 10 };
+    };
+
+    const result = await crafting.craft('oak_planks', 8, { searchRadius: 12, timeoutMs: 8_000 });
+
+    expect(result.success).toBe(true);
+    // A single call carrying a count of 2 is what strands the stack.
+    expect(batches).toEqual([1, 1]);
+  });
+
+  it('still reports failure when the result never turns up', async () => {
+    const { bot, crafting } = build({ inventory: [{ name: 'oak_planks', type: 43, count: 4, slot: 9 }] });
+    bot.recipesFor = () => [{ requiresTable: false, result: { count: 4 }, delta: [] }];
+    bot.craft = async () => {
+      bot.__calls.push('craft');
+    };
+
+    const result = await crafting.craft('stick', 4, { searchRadius: 12, timeoutMs: 200 });
+
+    expect(result).toMatchObject({ success: false, error: 'MINEFLAYER_ERROR' });
+    if (result.success) return;
+    expect(result.details).toContain('stick');
+  });
+
+  it('does not mistake the client-side result slot for a delivered craft', async () => {
+    const { bot, crafting } = build({ inventory: [{ name: 'oak_planks', type: 43, count: 8, slot: 9 }] });
+    bot.recipesFor = () => [{ requiresTable: false, result: { count: 4 }, delta: [] }];
+    // Mineflayer fakes the crafted stack into the result slot and the inputs
+    // into the 2x2 grid before the server answers. Those slots are not
+    // inventory: reading them as output reports a craft that never landed,
+    // and the agent then spends a second set of ingredients retrying it.
+    bot.craft = async () => {
+      bot.__calls.push('craft');
+      bot.inventory.slots[0] = { name: 'oak_planks', type: 43, count: 4, slot: 0 };
+      bot.inventory.slots[1] = { name: 'oak_log', type: 20, count: 1, slot: 1 };
+      bot.inventory.slots[3] = { name: 'oak_log', type: 20, count: 1, slot: 3 };
+    };
+
+    const result = await crafting.craft('oak_planks', 4, { searchRadius: 12, timeoutMs: 200 });
+
     expect(result).toMatchObject({ success: false, error: 'MINEFLAYER_ERROR' });
   });
 

@@ -146,6 +146,10 @@ and air, and the safety layer will interrupt whatever you were doing to tell you
 When a turn says *your head is inside spruce_leaves*, mine that block or step out
 before continuing. Mining a trunk from the ground avoids this entirely.
 
+**You can talk.** `say` sends a line to public chat, or whispers when given
+`to`. A player asking you something appears at the top of the turn under
+`## Important` — answer it with `say` and carry on; a message is not a new goal.
+
 **Night is dangerous.** Hostile mobs spawn in the dark. A shelter, a light source
 and a weapon all help. A bed lets you skip the night entirely — but you can only
 sleep at night or during a thunderstorm, and not with a hostile mob nearby.
