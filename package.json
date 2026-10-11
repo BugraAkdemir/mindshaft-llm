@@ -1,7 +1,7 @@
 {
   "name": "mindshaft-llm",
   "version": "1.0.0",
-  "description": "An LLM agent that plays Minecraft through symbolic world observation and a validated tool surface \u2014 or hand the folder to a coding agent and let it play.",
+  "description": "An LLM agent that plays Minecraft through symbolic world observation and a validated tool surface — or hand the folder to a coding agent and let it play.",
   "type": "module",
   "engines": {
     "node": ">=20.11.0"
@@ -11,7 +11,7 @@
     "mindshaft": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-panel-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "start": "node --enable-source-maps dist/index.js",
     "dev": "tsx watch src/index.ts",
@@ -21,7 +21,8 @@
     "test:coverage": "vitest run --coverage",
     "play": "node --enable-source-maps dist/index.js --control",
     "act": "node --enable-source-maps dist/act.js",
-    "server": "./server/start.sh"
+    "server": "./server/start.sh",
+    "panel": "node --enable-source-maps dist/panel/index.js"
   },
   "keywords": [
     "minecraft",

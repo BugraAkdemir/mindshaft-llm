@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mindshaft — control panel</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="status">
+      <span id="connection" class="pill pill--idle">starting</span>
+      <span class="stat">HP <b id="health">–</b></span>
+      <span class="stat">Food <b id="food">–</b></span>
+      <span class="stat">Pos <b id="pos">–</b></span>
+      <span class="stat">Time <b id="time">–</b></span>
+      <span class="stat">Cycle <b id="cycle">–</b></span>
+      <span class="stat goal">Goal <b id="goal">–</b></span>
+      <button id="notify" class="ghost" type="button">Notifications off</button>
+    </header>
+
+    <main>
+      <section class="panel">
+        <h2>Settings</h2>
+
+        <fieldset>
+          <legend>Minecraft server</legend>
+          <label>Host <input id="host" value="localhost" /></label>
+          <label>Port <input id="mcport" type="number" value="25565" /></label>
+          <label>Username <input id="username" value="AI_Agent" /></label>
+          <label>Version <input id="version" placeholder="auto-detect" /></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Model</legend>
+          <label>
+            Provider
+            <select id="provider">
+              <option value="jev">OpenCode Zen — Jev (decision model)</option>
+              <option value="openrouter">OpenRouter (chat model)</option>
+            </select>
+          </label>
+          <label>API key <input id="apikey" type="password" placeholder="kept in memory only" /></label>
+          <label>Model <input id="model" value="jev-1.13-free" /></label>
+          <label>Base URL <input id="baseurl" value="https://opencode.ai/zen/v1" /></label>
+        </fieldset>
+
+        <label>Goal <input id="goalInput" value="Gather wood, then craft wooden tools." /></label>
+
+        <div class="row">
+          <button id="start" class="primary" type="button">Start</button>
+          <button id="pause" type="button" disabled>Pause</button>
+          <button id="stop" type="button" disabled>Stop</button>
+        </div>
+        <p class="hint">
+          The API key is passed to the agent process and never written to disk.
+          Type instructions below while it runs — they reach the agent on the
+          next cycle.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Live feed</h2>
+
+        <form id="instruct" class="row" autocomplete="off">
+          <input id="instruction" placeholder="Collect wood, then craft a wooden pickaxe…" disabled />
+          <button type="submit" disabled>Send</button>
+        </form>
+        <ul id="pending" class="pending"></ul>
+
+        <div class="row controls">
+          <label class="ghost inline"><input id="autoscroll" type="checkbox" checked /> Auto-scroll</label>
+          <button id="clear" class="ghost" type="button">Clear</button>
+        </div>
+
+        <ol id="feed" class="feed"></ol>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
