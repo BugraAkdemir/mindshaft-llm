@@ -27,3 +27,6 @@ server/usercache.json
 
 # External-control exchange files (regenerated each run)
 control/
+
+# Control-panel run history (regenerated each run, may hold local settings)
+panel-history.json
