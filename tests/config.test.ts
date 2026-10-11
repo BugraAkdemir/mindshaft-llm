@@ -172,3 +172,84 @@ describe('config loading', () => {
     expect(loadConfig({ ...MINIMAL_ENV, MC_VERSION: '1.20.4' }, {}, true).minecraft.version).toBe('1.20.4');
   });
 });
+
+describe('Jev provider settings', () => {
+  it('defaults to the openrouter provider and a jev block', () => {
+    const cfg = loadConfig(MINIMAL_ENV, {}, true);
+    expect(cfg.llm.provider).toBe('openrouter');
+    expect(cfg.jev.model).toBe('jev-1.13-free');
+    expect(cfg.jev.baseUrl).toBe('https://opencode.ai/zen/v1');
+    expect(cfg.jev.confidenceThreshold).toBe(0.25);
+  });
+
+  it('points at the System One endpoint', () => {
+    const cfg = loadConfig({ ...MINIMAL_ENV, LLM_PROVIDER: 'jev' }, {}, true);
+    expect(`${cfg.jev.baseUrl}/systemone`).toBe('https://opencode.ai/zen/v1/systemone');
+    expect(cfg.llm.provider).toBe('jev');
+  });
+
+  it('falls back to OPENROUTER_API_KEY when JEV_API_KEY is blank', () => {
+    const cfg = loadConfig({ ...MINIMAL_ENV, JEV_API_KEY: '   ' }, {}, true);
+    expect(cfg.jev.apiKey).toBe('sk-or-v1-test');
+  });
+
+  it('prefers JEV_API_KEY when both are set', () => {
+    const cfg = loadConfig({ ...MINIMAL_ENV, JEV_API_KEY: 'zen-key' }, {}, true);
+    expect(cfg.jev.apiKey).toBe('zen-key');
+  });
+
+  it('rejects a confidence threshold outside 0..1', () => {
+    expect(() => loadConfig({ ...MINIMAL_ENV, JEV_CONFIDENCE_THRESHOLD: '1.4' }, {}, true)).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('accepts --llm-provider jev', () => {
+    const parsed = parseArgs(['--llm-provider', 'jev']);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.overrides.llmProvider).toBe('jev');
+  });
+
+  it('rejects an unknown provider name', () => {
+    expect(parseArgs(['--llm-provider', 'ollama']).errors[0]).toMatch(/--llm-provider/);
+  });
+
+  it('accepts --auth microsoft', () => {
+    const parsed = parseArgs(['--auth', 'microsoft']);
+    expect(parsed.errors).toEqual([]);
+    expect(loadConfig(MINIMAL_ENV, parsed.overrides, true).minecraft.auth).toBe('microsoft');
+  });
+});
+
+describe('panel settings', () => {
+  it('routes logs to stderr in panel mode', () => {
+    const cfg = loadConfig(MINIMAL_ENV, { panel: true }, true);
+    expect(cfg.log.stderr).toBe(true);
+    expect(cfg.log.pretty).toBe(false);
+  });
+
+  it('leaves logging on stdout outside panel mode', () => {
+    expect(loadConfig(MINIMAL_ENV, {}, true).log.stderr).toBe(false);
+  });
+
+  it('parses --panel', () => {
+    expect(parseArgs(['--panel']).overrides.panel).toBe(true);
+  });
+
+  it('parses --panel-port and implies --panel', () => {
+    const parsed = parseArgs(['--panel-port', '3010']);
+    expect(parsed.overrides.panelPort).toBe(3010);
+    expect(parsed.overrides.panel).toBe(true);
+  });
+
+  it('exposes PANEL_HOST and PANEL_PORT', () => {
+    const cfg = loadConfig({ ...MINIMAL_ENV, PANEL_PORT: '3100', PANEL_HOST: '0.0.0.0' }, {}, true);
+    expect(cfg.panel.port).toBe(3100);
+    expect(cfg.panel.host).toBe('0.0.0.0');
+  });
+
+  it('defaults the panel to loopback on 3008', () => {
+    const cfg = loadConfig(MINIMAL_ENV, {}, true);
+    expect(cfg.panel).toEqual({ host: '127.0.0.1', port: 3008 });
+  });
+});

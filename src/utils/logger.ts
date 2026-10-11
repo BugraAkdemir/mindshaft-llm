@@ -11,11 +11,17 @@ export type LogTag =
   | 'GOAL'
   | 'SAFETY'
   | 'BOT'
+  | 'CHAT'
   | 'MEMORY';
 
 export interface LoggerOptions {
   level: string;
   pretty: boolean;
+  /**
+   * Write records to stderr. Required when stdout is reserved for a
+   * machine-readable stream, as it is under the control panel.
+   */
+  stderr?: boolean;
 }
 
 /**
@@ -67,6 +73,12 @@ export function createLogger(options: LoggerOptions): Logger {
     });
   } else {
     rootLogger = pino(base);
+  }
+
+  // stderr wins over both branches above: the panel needs stdout for its
+  // event stream, and pino-pretty would otherwise write there too.
+  if (options.stderr) {
+    rootLogger = pino(base, pino.destination({ fd: 2 }));
   }
 
   return rootLogger;

@@ -57,10 +57,24 @@ const RawEnvSchema = z.object({
     .optional()
     .transform((v) => (v === undefined || v.trim() === '' ? 'auto' : v.trim().toLowerCase()))
     .pipe(LlmModeSchema),
+  LLM_PROVIDER: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? 'openrouter' : v.trim().toLowerCase()))
+    .pipe(z.enum(['openrouter', 'jev'])),
   LLM_TEMPERATURE: floatIn(0, 2, 0.3),
   LLM_MAX_TOKENS: intIn(128, 32_768, 1024),
   LLM_REQUEST_TIMEOUT_MS: intIn(1_000, 300_000, 45_000),
   LLM_MAX_RETRIES: intIn(0, 5, 2),
+
+  // OpenCode Zen — Jev, a "System One" model. It answers typed questions at
+  // /systemone rather than generating text, so it needs its own settings.
+  JEV_API_KEY: optionalString,
+  JEV_MODEL: nonEmpty('jev-1.13-free'),
+  JEV_BASE_URL: nonEmpty('https://opencode.ai/zen/v1'),
+  JEV_REQUEST_TIMEOUT_MS: intIn(1_000, 300_000, 30_000),
+  JEV_MAX_RETRIES: intIn(0, 5, 2),
+  JEV_CONFIDENCE_THRESHOLD: floatIn(0, 1, 0.25),
 
   MC_HOST: nonEmpty('localhost'),
   MC_PORT: intIn(1, 65_535, 25_565),
@@ -103,6 +117,9 @@ const RawEnvSchema = z.object({
   VIEWER_PORT: intIn(1, 65_535, 3007),
   VIEWER_FIRST_PERSON: boolish(false),
 
+  PANEL_HOST: nonEmpty('127.0.0.1'),
+  PANEL_PORT: intIn(1, 65_535, 3008),
+
   LOG_LEVEL: z
     .string()
     .optional()
@@ -115,6 +132,8 @@ const RawEnvSchema = z.object({
 
 export interface LlmConfig {
   apiKey: string;
+  /** Which provider drives the agent. `jev` is a structured decision model. */
+  provider: LlmProviderName;
   model: string;
   baseUrl: string;
   siteUrl: string | undefined;
@@ -124,6 +143,19 @@ export interface LlmConfig {
   maxTokens: number;
   requestTimeoutMs: number;
   maxRetries: number;
+}
+
+export type LlmProviderName = 'openrouter' | 'jev';
+
+/** OpenCode Zen's Jev, reached at `{baseUrl}/systemone`. */
+export interface JevConfig {
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  requestTimeoutMs: number;
+  maxRetries: number;
+  /** Below this winning probability the decision is flagged but still acted on. */
+  confidenceThreshold: number;
 }
 
 export interface MinecraftConfig {
@@ -172,18 +204,28 @@ export interface ViewerConfig {
   firstPerson: boolean;
 }
 
+/** The local web control panel. */
+export interface PanelConfig {
+  host: string;
+  port: number;
+}
+
 export interface LogConfig {
   level: string;
   pretty: boolean;
+  /** Records go to stderr, leaving stdout for the panel's event stream. */
+  stderr: boolean;
 }
 
 export interface Config {
   llm: LlmConfig;
+  jev: JevConfig;
   minecraft: MinecraftConfig;
   agent: AgentConfig;
   control: ControlConfig;
   chat: ChatConfig;
   viewer: ViewerConfig;
+  panel: PanelConfig;
   log: LogConfig;
 }
 
@@ -195,12 +237,17 @@ export interface CliOverrides {
   port?: number;
   username?: string;
   debug?: boolean;
+  auth?: 'offline' | 'microsoft';
   mode?: LlmMode;
+  llmProvider?: LlmProviderName;
   version?: string;
   viewer?: boolean;
   viewerPort?: number;
   control?: boolean;
   controlDir?: string;
+  /** Sends logs to stderr so stdout can carry the panel's event stream. */
+  panel?: boolean;
+  panelPort?: number;
 }
 
 export class ConfigError extends Error {
@@ -250,6 +297,7 @@ export function loadConfig(
   return {
     llm: {
       apiKey,
+      provider: overrides.llmProvider ?? e.LLM_PROVIDER,
       model: overrides.model ?? e.OPENROUTER_MODEL,
       baseUrl: e.OPENROUTER_BASE_URL.replace(/\/+$/, ''),
       siteUrl: e.OPENROUTER_SITE_URL,
@@ -260,11 +308,21 @@ export function loadConfig(
       requestTimeoutMs: e.LLM_REQUEST_TIMEOUT_MS,
       maxRetries: e.LLM_MAX_RETRIES,
     },
+    jev: {
+      // One key file is enough: a blank JEV_API_KEY falls back to the
+      // OpenRouter variable, so a Zen key can live in either place.
+      apiKey: e.JEV_API_KEY ?? apiKey,
+      model: e.JEV_MODEL,
+      baseUrl: e.JEV_BASE_URL.replace(/\/+$/, ''),
+      requestTimeoutMs: e.JEV_REQUEST_TIMEOUT_MS,
+      maxRetries: e.JEV_MAX_RETRIES,
+      confidenceThreshold: e.JEV_CONFIDENCE_THRESHOLD,
+    },
     minecraft: {
       host: overrides.host ?? e.MC_HOST,
       port: overrides.port ?? e.MC_PORT,
       username: overrides.username ?? e.MC_USERNAME,
-      auth: e.MC_AUTH,
+      auth: overrides.auth ?? e.MC_AUTH,
       password: e.MC_PASSWORD,
       version: overrides.version ?? e.MC_VERSION,
     },
@@ -302,9 +360,14 @@ export function loadConfig(
       port: overrides.viewerPort ?? e.VIEWER_PORT,
       firstPerson: e.VIEWER_FIRST_PERSON,
     },
+    panel: {
+      host: e.PANEL_HOST,
+      port: overrides.panelPort ?? e.PANEL_PORT,
+    },
     log: {
       level: overrides.debug ? 'debug' : e.LOG_LEVEL,
-      pretty: e.LOG_PRETTY,
+      pretty: overrides.panel === true ? false : e.LOG_PRETTY,
+      stderr: overrides.panel === true,
     },
   };
 }
@@ -323,9 +386,12 @@ const FLAGS_WITH_VALUES = new Set([
   '--host',
   '--port',
   '--username',
+  '--auth',
   '--mode',
+  '--llm-provider',
   '--version',
   '--viewer-port',
+  '--panel-port',
   '--control-dir',
 ]);
 
@@ -353,6 +419,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     if (raw === '--viewer') {
       overrides.viewer = true;
+      continue;
+    }
+    if (raw === '--panel') {
+      overrides.panel = true;
       continue;
     }
     if (raw === '--control' || raw === '--play') {
@@ -419,6 +489,34 @@ export function parseArgs(argv: string[]): ParsedArgs {
         }
         break;
       }
+      case '--panel-port': {
+        const port = Number(value);
+        if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+          errors.push(`Invalid --panel-port "${value}" (expected 1-65535).`);
+        } else {
+          overrides.panelPort = port;
+          overrides.panel = true;
+        }
+        break;
+      }
+      case '--auth': {
+        const auth = value.toLowerCase();
+        if (auth === 'offline' || auth === 'microsoft') {
+          overrides.auth = auth;
+        } else {
+          errors.push(`Invalid --auth "${value}" (expected offline | microsoft).`);
+        }
+        break;
+      }
+      case '--llm-provider': {
+        const name = value.toLowerCase();
+        if (name === 'openrouter' || name === 'jev') {
+          overrides.llmProvider = name;
+        } else {
+          errors.push(`Invalid --llm-provider "${value}" (expected openrouter | jev).`);
+        }
+        break;
+      }
       case '--control-dir':
         overrides.controlDir = value;
         overrides.control = true;
@@ -455,11 +553,20 @@ Options:
   --version <mc>       Force a Minecraft protocol version (default: auto-detect).
   --mode <auto|tools|json>
                        How to request actions from the model.
+  --llm-provider <openrouter|jev>
+                       Which provider drives the agent. "jev" uses OpenCode Zen's
+                       Jev decision model, which answers typed questions instead
+                       of generating text (default: openrouter).
+  --auth <offline|microsoft>
+                       Minecraft authentication mode.
   --control, --play    Let an external controller (you, or another AI agent)
                        play by exchanging JSON files in ./control. No API key.
   --control-dir <dir>  Directory for the control files (implies --control).
   --viewer             Open a live 3D view of the bot in your browser.
   --viewer-port <port> Port for the live view (default: 3007; implies --viewer).
+  --panel             Send logs to stderr and the event stream to stdout, so the
+                       web control panel can supervise this process.
+  --panel-port <port> Port for the control panel (default: 3008; implies --panel).
   --debug              Verbose logging.
   -h, --help           Show this message.
 
