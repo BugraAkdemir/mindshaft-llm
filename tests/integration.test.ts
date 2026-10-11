@@ -379,3 +379,73 @@ describe('integration — events reach the prompt', () => {
     agent.stop();
   });
 });
+
+describe('integration — the operator message channel', () => {
+  const OPERATOR = { CHAT_COMMANDS: 'true', CHAT_COMMAND_USERS: 'bugraa' };
+
+  it('puts a whispered question in front of the agent without changing the goal', async () => {
+    const { agent, provider, bot } = await harness(
+      [{ content: decisionJson('observe') }, { content: decisionJson('observe') }],
+      { env: OPERATOR },
+    );
+
+    const goalBefore = agent.goals.snapshot().goal;
+    await agent.runCycle();
+    bot.emit('whisper', 'bugraa', 'kac tane odunun var?');
+    await agent.runCycle();
+
+    const prompt = provider.requests[1]!.messages[1]!.content;
+    expect(prompt).toContain('## Important');
+    expect(prompt).toContain('kac tane odunun var?');
+    expect(prompt).toContain('say tool');
+    expect(agent.goals.snapshot().goal).toBe(goalBefore);
+    agent.stop();
+  });
+
+  it('keeps reminding the agent until it actually answers', async () => {
+    const said: string[] = [];
+    const { agent, provider, bot } = await harness(
+      [
+        { content: decisionJson('observe') },
+        { content: decisionJson('observe') },
+        { content: decisionJson('say', { message: 'iki stack odun var' }) },
+        { content: decisionJson('observe') },
+      ],
+      { env: OPERATOR },
+    );
+    (bot as unknown as { chat: (text: string) => void }).chat = (text) => said.push(text);
+
+    await agent.runCycle();
+    bot.emit('whisper', 'bugraa', 'kac tane odunun var?');
+
+    // Ignored once...
+    await agent.runCycle();
+    expect(provider.requests[1]!.messages[1]!.content).toContain('kac tane odunun var?');
+
+    // ...still there on the next turn, because it was never answered.
+    await agent.runCycle();
+    expect(provider.requests[2]!.messages[1]!.content).toContain('kac tane odunun var?');
+    expect(said).toEqual(['iki stack odun var']);
+
+    // Answered, so it stops nagging.
+    await agent.runCycle();
+    expect(provider.requests[3]!.messages[1]!.content).not.toContain('kac tane odunun var?');
+    agent.stop();
+  });
+
+  it('reports an operator message once, not also as untrusted chatter', async () => {
+    const { agent, provider, bot } = await harness(
+      [{ content: decisionJson('observe') }, { content: decisionJson('observe') }],
+      { env: OPERATOR },
+    );
+
+    await agent.runCycle();
+    bot.emit('chat', 'bugraa', '!msg evi begendim');
+    await agent.runCycle();
+
+    const prompt = provider.requests[1]!.messages[1]!.content;
+    expect(prompt).toContain('evi begendim');
+    expect(prompt).not.toContain('[untrusted player chat]');
+    agent.stop();
+  });
+});

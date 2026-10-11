@@ -92,6 +92,9 @@ export class ActionLoop {
 
         this.cycles += 1;
         const cycle = await this.agent.runCycle();
+        // Narrated here as well as in the agent, because this is where the
+        // terminal kinds (llm_error, goal_complete) are known.
+        this.agent.emit({ type: 'cycle', cycle: this.cycles, kind: cycle.kind });
 
         switch (cycle.kind) {
           case 'acted': {
