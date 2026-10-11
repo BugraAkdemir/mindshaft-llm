@@ -6,6 +6,8 @@
  * only requires a new implementation of `LLMProvider`.
  */
 
+import type { WorldState } from '../types.js';
+
 export type LlmRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface LlmMessage {
@@ -37,10 +39,21 @@ export type LlmOutputMode = 'tools' | 'json';
 export interface LlmRequest {
   messages: LlmMessage[];
   mode: LlmOutputMode;
+  /**
+   * Tool specs for native tool calling. Sent regardless of `mode`: a provider
+   * running in JSON mode may still need the catalogue to ask its own questions
+   * about what to do.
+   */
   tools?: LlmToolSpec[];
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /**
+   * The structured turn state. Providers that cannot read prose — such as a
+   * System One decision model — take their inputs from here rather than
+   * re-parsing `messages`.
+   */
+  observation?: WorldState;
 }
 
 export interface LlmUsage {

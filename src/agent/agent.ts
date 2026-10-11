@@ -18,12 +18,23 @@ import { createToolRegistry, type ToolRegistry } from '../tools/index.js';
 import type { ActionRecord, AgentDecision, ToolResult, WorldState } from '../types.js';
 import { tagged, type Logger } from '../utils/logger.js';
 import { round } from '../utils/spatial.js';
+import { EventBus, type AgentStreamEvent, type EventListener } from './events.js';
 import { MemoryManager } from './memory.js';
 import { GoalManager } from './planner.js';
 import { buildCorrectionPrompt, buildCyclePrompt, buildSystemPrompt } from './prompts.js';
 
 /** How many correction round-trips a single decision may take. */
 const MAX_DECISION_ATTEMPTS = 3;
+
+/** Unanswered operator messages kept in front of the agent at once. */
+const MAX_UNANSWERED_MESSAGES = 3;
+
+interface IncomingMessage {
+  from: string;
+  text: string;
+  via: 'chat' | 'whisper';
+  at: number;
+}
 
 export interface CycleResult {
   kind: 'acted' | 'goal_complete' | 'llm_error' | 'undecidable' | 'disconnected';
@@ -63,6 +74,8 @@ export class Agent {
   private paused = false;
   /** Set when an in-game command asks the run to end. */
   private stopRequest: string | null = null;
+  /** Messages from the operator that the agent has not spoken back to yet. */
+  private inbox: IncomingMessage[] = [];
 
   private systemPrompt = '';
   /** Set in control mode so each outcome is mirrored into the control folder. */
@@ -70,6 +83,9 @@ export class Agent {
   private started = false;
   /** Guidance queued for the next prompt (corrections, safety notes). */
   private pendingGuidance: string[] = [];
+  /** Narration for any attached control panel. */
+  private readonly bus = new EventBus();
+  private cycleCount = 0;
 
   /**
    * `session` is injectable so the whole observe/decide/act path can be
@@ -105,6 +121,7 @@ export class Agent {
     if (this.started) return this.bot;
 
     this.bot = await this.session.connect();
+    this.emit({ type: 'lifecycle', status: 'connected' });
     this.registry = GameRegistry.fromBotVersion(this.bot.version);
 
     this.movement = new MovementController(this.bot, this.cfg.agent, this.baseLog);
@@ -120,6 +137,8 @@ export class Agent {
       this.registry,
       (event) => this.memory.recordEvent(event),
       this.baseLog,
+      // Resolved lazily: the command listener is built a few lines below.
+      (username, message) => this.chatCommands?.claims(username, message) ?? false,
     );
     this.events.attach();
 
@@ -155,6 +174,7 @@ export class Agent {
         resume: () => {
           this.paused = false;
         },
+        message: (from, text, via) => this.receiveMessage(from, text, via),
       },
       this.baseLog,
     );
@@ -216,10 +236,28 @@ export class Agent {
   /** One full observe → decide → act → remember cycle. */
   public async runCycle(): Promise<CycleResult> {
     if (!this.session.isConnected) {
+      this.emit({
+        type: 'lifecycle',
+        status: 'disconnected',
+        detail: this.session.endState?.details ?? 'connection lost',
+      });
       return { kind: 'disconnected', detail: this.session.endState?.details ?? 'connection lost' };
     }
 
     const state = this.observe();
+    this.cycleCount += 1;
+    const cycle = this.cycleCount;
+    this.emit({
+      type: 'world',
+      cycle,
+      health: state.player.health,
+      food: state.player.food,
+      pos: state.player.position,
+      timeOfDay: state.environment.timeOfDay,
+      isDay: state.environment.isDay,
+      inventory: state.inventory,
+    });
+
     const observeLog = tagged('OBSERVE', this.baseLog);
     observeLog.info(
       `HP=${state.player.health} Food=${state.player.food} Pos=${state.player.position.x},${state.player.position.y},${state.player.position.z} ` +
@@ -242,6 +280,14 @@ export class Agent {
 
     this.goals.beginCycle(decision.decision.reason);
 
+    this.emit({
+      type: 'decision',
+      cycle,
+      tool: decision.decision.tool,
+      arguments: decision.decision.arguments,
+      reason: decision.decision.reason,
+    });
+
     if (decision.decision.remember) {
       this.memory.remember(decision.decision.remember);
     }
@@ -256,6 +302,13 @@ export class Agent {
     }
 
     const result = await this.execute(decision.decision);
+    this.emit({
+      type: 'result',
+      cycle,
+      success: result.success,
+      ...(result.success ? {} : { error: result.error, details: result.details }),
+      durationMs: result.durationMs,
+    });
     return { kind: 'acted', decision: decision.decision, result };
   }
 
@@ -275,7 +328,7 @@ export class Agent {
     const mode = this.outputMode();
 
     const events = this.memory.takeEvents();
-    const guidance = this.pendingGuidance;
+    const guidance = [...this.describeInbox(), ...this.pendingGuidance];
     this.pendingGuidance = [];
 
     const userPrompt = buildCyclePrompt({
@@ -298,7 +351,10 @@ export class Agent {
         response = await this.provider.complete({
           messages,
           mode,
-          ...(mode === 'tools' ? { tools: this.tools.specs() } : {}),
+          // Sent in every mode: a JSON-mode provider may still need the
+          // catalogue to decide what to ask the model about.
+          tools: this.tools.specs(),
+          observation: state,
         });
       } catch (err) {
         if (err instanceof LlmError && err.code === 'TOOLS_UNSUPPORTED') {
@@ -444,6 +500,11 @@ export class Agent {
     };
     this.memory.recordAction(record);
 
+    // Speaking is the acknowledgement, so a successful `say` retires whatever
+    // was waiting for an answer. Without this the reminder outlives the reply
+    // and the agent keeps answering the same question.
+    if (decision.tool === 'say' && result.success) this.inbox = [];
+
     if (this.resultSink) {
       void Promise.resolve(
         this.resultSink({
@@ -506,6 +567,25 @@ export class Agent {
     this.pendingGuidance.push(message);
   }
 
+  /**
+   * Subscribes to the cycle narration. Returns an unsubscribe function, so a
+   * panel that disconnects can detach without the agent keeping a dead
+   * reference to it.
+   */
+  public onEvent(listener: EventListener): () => void {
+    return this.bus.on(listener);
+  }
+
+  /** Publishes an event. Used by `ActionLoop` for outcomes the agent itself does not see. */
+  public emit(event: AgentStreamEvent): void {
+    this.bus.emit(event);
+  }
+
+  /** Pauses or resumes the run without losing any queued instruction. */
+  public setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
   /** True while an in-game command has the agent paused. */
   public get isPaused(): boolean {
     return this.paused;
@@ -514,6 +594,33 @@ export class Agent {
   /** Reason an in-game command asked the run to stop, if any. */
   public get requestedStop(): string | null {
     return this.stopRequest;
+  }
+
+  /**
+   * Takes in something the operator said that is not a command.
+   *
+   * It deliberately does **not** touch the goal. Before this channel existed a
+   * question had to be phrased as `!goal`, which discarded whatever the agent
+   * was working on just to ask it where it was standing.
+   */
+  public receiveMessage(from: string, text: string, via: 'chat' | 'whisper' = 'chat'): void {
+    this.inbox.push({ from, text, via, at: Date.now() });
+    // Keep the newest few: an unanswered backlog is worth surfacing, but not at
+    // the cost of pushing the world state out of the prompt.
+    if (this.inbox.length > MAX_UNANSWERED_MESSAGES) {
+      this.inbox = this.inbox.slice(-MAX_UNANSWERED_MESSAGES);
+    }
+    tagged('CHAT', this.baseLog).info(`message from ${from} (${via}): ${text}`);
+  }
+
+  /** Messages still awaiting a reply, rendered for the top of the prompt. */
+  private describeInbox(): string[] {
+    return this.inbox.map(
+      (message) =>
+        `${message.from} (a trusted operator) said to you via ${message.via}: "${message.text}" — ` +
+        'this is a message, not a new goal and not a tool call. If it asks something or wants an answer, ' +
+        `reply this turn with the say tool (to="${message.from}"), then carry on with your goal.`,
+    );
   }
 
   /**
